@@ -1,4 +1,4 @@
-# Yifan Hu Graph Layout
+# yifan_hu
 
 This crate implements the multilevel spring-electrical graph layout described in
 Yifan Hu's "Efficient and High Quality Force-Directed Graph Drawing". It
