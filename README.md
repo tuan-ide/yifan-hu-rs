@@ -11,13 +11,13 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-yifan-hu-graph-layout = { git = "https://github.com/tuan-ide/yifan-hu-graph-layout" }
+yifan-hu-rs = { git = "https://github.com/tuan-ide/yifan-hu-graph-layout" }
 ```
 
 Then call the multilevel layout from your code:
 
 ```rust
-use yifan_hu_graph_layout::{Graph, LayoutSettings, multilevel_layout};
+use yifan_hu_rs::{Graph, LayoutSettings, multilevel_layout};
 
 fn main() {
     // Build a simple line graph with four vertices.
