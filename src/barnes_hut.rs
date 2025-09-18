@@ -250,3 +250,41 @@ fn repulsive_pair(
     let scale = coeff * other_weight / dist.powf(exponent + 1.0);
     delta * scale
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn direct_repulsion(
+        index: usize,
+        points: &[(usize, Vec2, f64)],
+        coeff: f64,
+        exponent: f64,
+    ) -> Vec2 {
+        let (_, origin, _) = points[index];
+        let mut sum = Vec2::zero();
+        for &(other_idx, other_pos, weight) in points {
+            if other_idx == index {
+                continue;
+            }
+            sum += super::repulsive_pair(origin, other_pos, weight, None, coeff, exponent);
+        }
+        sum
+    }
+
+    #[test]
+    fn theta_zero_matches_direct_sum() {
+        let points = vec![
+            (0, Vec2::new(0.0, 0.0), 1.0),
+            (1, Vec2::new(1.0, 0.0), 1.0),
+            (2, Vec2::new(0.0, 1.0), 1.0),
+        ];
+        let tree = BarnesHutTree::new(&points, 8, 1);
+        let coeff = 0.2;
+        let exponent = 1.0;
+        let bh_force = tree.repulsive_force(0, points[0].1, 0.0, None, coeff, exponent);
+        let direct = direct_repulsion(0, &points, coeff, exponent);
+        assert!((bh_force.x - direct.x).abs() < 1e-9);
+        assert!((bh_force.y - direct.y).abs() < 1e-9);
+    }
+}

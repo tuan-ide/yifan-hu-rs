@@ -181,6 +181,29 @@ fn jitter_overlaps(positions: &mut [Vec2], rng: &mut StdRng, fraction: f64) {
     }
 }
 
+pub(crate) fn update_step_adaptive(
+    step: f64,
+    progress: usize,
+    energy: f64,
+    energy_prev: f64,
+    settings: &LayoutSettings,
+) -> (f64, usize, f64) {
+    let mut step = step;
+    let mut progress = progress;
+    if energy < energy_prev {
+        progress += 1;
+        if progress >= settings.adaptive_progress_limit {
+            let denom = settings.adaptive_decay.max(1e-6);
+            step = (step / denom).min(settings.max_step);
+            progress = 0;
+        }
+    } else {
+        step = (step * settings.adaptive_decay).max(settings.min_step);
+        progress = 0;
+    }
+    (step, progress, energy)
+}
+
 fn prolongate(
     prolongation: &[Vec<(usize, f64)>],
     coarse_positions: &[Vec2],
@@ -275,20 +298,15 @@ fn force_directed(params: ForceParams<'_>) -> usize {
 
         match step_scheme {
             StepScheme::Adaptive => {
-                if energy < energy_prev {
-                    progress += 1;
-                    if progress >= settings.adaptive_progress_limit {
-                        step = (step / settings.adaptive_decay).min(settings.max_step);
-                        progress = 0;
-                    }
-                } else {
-                    step = (step * settings.adaptive_decay).max(settings.min_step);
-                    progress = 0;
-                }
-                energy_prev = energy;
+                let (new_step, new_progress, new_energy_prev) =
+                    update_step_adaptive(step, progress, energy, energy_prev, settings);
+                step = new_step;
+                progress = new_progress;
+                energy_prev = new_energy_prev;
             }
             StepScheme::Simple => {
                 step = (step * settings.cooling_factor).clamp(settings.min_step, settings.max_step);
+                energy_prev = energy;
             }
         }
     }
@@ -332,5 +350,25 @@ mod tests {
         for pos in result.positions {
             assert!(pos.x.is_finite() && pos.y.is_finite());
         }
+    }
+
+    #[test]
+    fn adaptive_step_matches_pdf_progress_increase() {
+        let settings = LayoutSettings::default();
+        let (step, progress, energy_prev) = update_step_adaptive(1.0, 4, 0.5, 1.0, &settings);
+        let expected = 1.0 / settings.adaptive_decay;
+        assert!((step - expected).abs() < 1e-9);
+        assert_eq!(progress, 0);
+        assert!((energy_prev - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adaptive_step_matches_pdf_energy_increase() {
+        let settings = LayoutSettings::default();
+        let (step, progress, energy_prev) = update_step_adaptive(1.0, 2, 2.0, 1.0, &settings);
+        let expected = 1.0 * settings.adaptive_decay;
+        assert!((step - expected).abs() < 1e-9);
+        assert_eq!(progress, 0);
+        assert!((energy_prev - 2.0).abs() < 1e-12);
     }
 }

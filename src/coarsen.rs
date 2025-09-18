@@ -15,6 +15,7 @@ pub enum CoarseningStrategy {
 pub struct CoarsenResult {
     pub coarse: Graph,
     pub prolongation: Vec<Vec<(usize, f64)>>,
+    pub used_strategy: CoarseningStrategy,
 }
 
 pub fn coarsen<R: Rng + ?Sized>(
@@ -106,6 +107,7 @@ fn edge_collapse<R: Rng + ?Sized>(graph: &Graph, rng: &mut R) -> Option<CoarsenR
     Some(CoarsenResult {
         coarse,
         prolongation,
+        used_strategy: CoarseningStrategy::EdgeCollapse,
     })
 }
 
@@ -192,6 +194,7 @@ fn mivs<R: Rng + ?Sized>(graph: &Graph, rng: &mut R) -> Option<CoarsenResult> {
     Some(CoarsenResult {
         coarse,
         prolongation,
+        used_strategy: CoarseningStrategy::Mivs,
     })
 }
 
@@ -279,4 +282,37 @@ fn build_coarse_graph(
     }
 
     coarse
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    fn path_graph(n: usize) -> Graph {
+        let mut g = Graph::new(n);
+        for i in 0..n - 1 {
+            g.add_edge(i, i + 1, 1.0);
+        }
+        g
+    }
+
+    #[test]
+    fn edge_collapse_reduces_vertex_count() {
+        let graph = path_graph(6);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let result =
+            coarsen(&graph, CoarseningStrategy::EdgeCollapse, 0.75, &mut rng).expect("coarsened");
+        assert!(result.coarse.node_count() < graph.node_count());
+        assert_eq!(result.used_strategy, CoarseningStrategy::EdgeCollapse);
+    }
+
+    #[test]
+    fn hybrid_falls_back_to_mivs_when_ratio_exceeds_threshold() {
+        let graph = path_graph(8);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let result = coarsen(&graph, CoarseningStrategy::Hybrid, 0.1, &mut rng).expect("coarsened");
+        assert_eq!(result.used_strategy, CoarseningStrategy::Mivs);
+        assert!(result.coarse.node_count() < graph.node_count());
+    }
 }
