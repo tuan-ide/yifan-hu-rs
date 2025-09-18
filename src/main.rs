@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use yifan_hu_rs::{Graph, LayoutSettings, Vec2, multilevel_layout};
+use yifan_hu::{Graph, LayoutSettings, Vec2, multilevel_layout};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_args()?;
@@ -127,7 +127,7 @@ fn parse_args() -> Result<CliOptions, Box<dyn Error>> {
 
 fn print_usage() {
     eprintln!(
-        "Usage: yifan-hu-rs [--input path] [--output path] [--iterations n] [--tolerance tol] [--theta value] [--exponent value] [--seed value]"
+        "Usage: yifan_hu [--input path] [--output path] [--iterations n] [--tolerance tol] [--theta value] [--exponent value] [--seed value]"
     );
     eprintln!("You can also pass the input and output file paths positionally.");
     eprintln!(
