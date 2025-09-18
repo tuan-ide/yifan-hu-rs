@@ -1,16 +1,9 @@
-mod barnes_hut;
-mod coarsen;
-mod graph;
-mod layout;
-mod vector;
-
-use crate::graph::Graph;
-use crate::layout::{LayoutSettings, multilevel_layout};
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use yifan_hu_graph_layout::{Graph, LayoutSettings, Vec2, multilevel_layout};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_args()?;
@@ -142,10 +135,7 @@ fn print_usage() {
     );
 }
 
-fn write_positions(
-    path: &PathBuf,
-    positions: &[crate::vector::Vec2],
-) -> Result<(), Box<dyn Error>> {
+fn write_positions(path: &PathBuf, positions: &[Vec2]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     writeln!(writer, "vertex,x,y")?;
