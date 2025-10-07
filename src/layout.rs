@@ -18,6 +18,7 @@ pub struct LayoutSettings {
     pub theta: f64,
     pub c_strength: f64,
     pub repulsive_cutoff: Option<f64>,
+    pub repulsive_cutoff_multiplier: Option<f64>,
     pub tree_capacity: usize,
     pub tree_depth: usize,
     pub coarsening_strategy: CoarseningStrategy,
@@ -25,6 +26,8 @@ pub struct LayoutSettings {
     pub min_coarse_size: usize,
     pub random_seed: Option<u64>,
     pub jitter_fraction: f64,
+    pub optimal_distance: Option<f64>,
+    pub min_edge_length_ratio: f64,
 }
 
 impl Default for LayoutSettings {
@@ -40,15 +43,18 @@ impl Default for LayoutSettings {
             adaptive_progress_limit: 5,
             repulsive_exponent: 1.0,
             theta: 1.2,
-            c_strength: 0.2,
+            c_strength: 0.01,
             repulsive_cutoff: None,
+            repulsive_cutoff_multiplier: Some(10.0),
             tree_capacity: 1,
             tree_depth: 10,
             coarsening_strategy: CoarseningStrategy::Hybrid,
             coarsening_ratio_threshold: 0.75,
             min_coarse_size: 2,
             random_seed: None,
-            jitter_fraction: 0.01,
+            jitter_fraction: 0.1,
+            optimal_distance: None,
+            min_edge_length_ratio: 0.25,
         }
     }
 }
@@ -59,23 +65,46 @@ pub struct LayoutResult {
     pub iterations: usize,
 }
 
-enum StepScheme {
-    Adaptive,
-    Simple,
-}
-
 struct ForceParams<'a> {
     graph: &'a Graph,
     positions: &'a mut [Vec2],
-    step_scheme: StepScheme,
     settings: &'a LayoutSettings,
+    optimal_distance: f64,
+    repulsive_cutoff: Option<f64>,
 }
 
 pub fn multilevel_layout(graph: &Graph, settings: &LayoutSettings) -> LayoutResult {
     let seed = settings.random_seed.unwrap_or(42);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut positions = vec![Vec2::zero(); graph.node_count()];
-    let iterations = multilevel_layout_recursive(graph, settings, &mut rng, &mut positions);
+    let optimal_distance = resolve_optimal_distance(graph, settings);
+    let repulsive_cutoff = resolve_repulsive_cutoff(settings, optimal_distance);
+    let mut iterations = multilevel_layout_recursive(
+        graph,
+        settings,
+        &mut rng,
+        &mut positions,
+        optimal_distance,
+        repulsive_cutoff,
+    );
+    let median_edge = median_edge_length(graph, &positions);
+    if median_edge < optimal_distance * settings.min_edge_length_ratio {
+        randomize_positions(&mut positions, &mut rng);
+        iterations += force_directed(ForceParams {
+            graph,
+            positions: &mut positions,
+            settings,
+            optimal_distance,
+            repulsive_cutoff,
+        });
+    }
+    iterations += force_directed(ForceParams {
+        graph,
+        positions: &mut positions,
+        settings,
+        optimal_distance,
+        repulsive_cutoff,
+    });
     LayoutResult {
         positions,
         iterations,
@@ -87,14 +116,17 @@ fn multilevel_layout_recursive(
     settings: &LayoutSettings,
     rng: &mut StdRng,
     positions: &mut [Vec2],
+    optimal_distance: f64,
+    repulsive_cutoff: Option<f64>,
 ) -> usize {
     if graph.node_count() <= settings.min_coarse_size {
         randomize_positions(positions, rng);
         return force_directed(ForceParams {
             graph,
             positions,
-            step_scheme: StepScheme::Adaptive,
             settings,
+            optimal_distance,
+            repulsive_cutoff,
         });
     }
 
@@ -110,16 +142,21 @@ fn multilevel_layout_recursive(
             ..
         }) if coarse.node_count() >= settings.min_coarse_size => {
             let mut coarse_positions = vec![Vec2::zero(); coarse.node_count()];
-            let coarse_iterations =
-                multilevel_layout_recursive(&coarse, settings, rng, &mut coarse_positions);
+            let coarse_iterations = multilevel_layout_recursive(
+                &coarse,
+                settings,
+                rng,
+                &mut coarse_positions,
+                optimal_distance,
+                repulsive_cutoff,
+            );
 
             prolongate(&prolongation, &coarse_positions, positions);
-            jitter_overlaps(positions, rng, settings.jitter_fraction);
+            jitter_overlaps(positions, rng, optimal_distance, settings.jitter_fraction);
 
-            let fine_diameter = graph.approximate_diameter().max(1) as f64;
-            let coarse_diameter = coarse.approximate_diameter().max(1) as f64;
-            if coarse_diameter > 0.0 {
-                let scale = fine_diameter / coarse_diameter;
+            let avg_edge = average_edge_length(graph, positions);
+            if avg_edge > 1e-6 {
+                let scale = (optimal_distance / avg_edge).clamp(0.5, 2.0);
                 for pos in positions.iter_mut() {
                     *pos = *pos * scale;
                 }
@@ -128,8 +165,9 @@ fn multilevel_layout_recursive(
             let refine_iterations = force_directed(ForceParams {
                 graph,
                 positions,
-                step_scheme: StepScheme::Simple,
                 settings,
+                optimal_distance,
+                repulsive_cutoff,
             });
             coarse_iterations + refine_iterations
         }
@@ -138,8 +176,9 @@ fn multilevel_layout_recursive(
             force_directed(ForceParams {
                 graph,
                 positions,
-                step_scheme: StepScheme::Adaptive,
                 settings,
+                optimal_distance,
+                repulsive_cutoff,
             })
         }
     }
@@ -155,12 +194,13 @@ fn randomize_positions(positions: &mut [Vec2], rng: &mut StdRng) {
     }
 }
 
-fn jitter_overlaps(positions: &mut [Vec2], rng: &mut StdRng, fraction: f64) {
+fn jitter_overlaps(positions: &mut [Vec2], rng: &mut StdRng, base_length: f64, fraction: f64) {
     if positions.is_empty() {
         return;
     }
     let mut lookup = std::collections::HashMap::<(i64, i64), Vec<usize>>::new();
-    let scale = 1.0 / fraction.max(1e-6);
+    let amplitude = (base_length * fraction).max(1e-3);
+    let scale = 1.0 / amplitude.max(1e-6);
     for (idx, pos) in positions.iter().enumerate() {
         let key = (
             (pos.x * scale).round() as i64,
@@ -173,8 +213,8 @@ fn jitter_overlaps(positions: &mut [Vec2], rng: &mut StdRng, fraction: f64) {
             continue;
         }
         for &idx in group {
-            let jitter_x = rng.gen_range(-fraction..fraction);
-            let jitter_y = rng.gen_range(-fraction..fraction);
+            let jitter_x = rng.gen_range(-amplitude..amplitude);
+            let jitter_y = rng.gen_range(-amplitude..amplitude);
             positions[idx].x += jitter_x;
             positions[idx].y += jitter_y;
         }
@@ -226,14 +266,16 @@ fn force_directed(params: ForceParams<'_>) -> usize {
     let ForceParams {
         graph,
         positions,
-        step_scheme,
         settings,
-        ..
+        optimal_distance,
+        repulsive_cutoff,
     } = params;
 
-    let mut step = settings
-        .initial_step
-        .clamp(settings.min_step, settings.max_step);
+    let optimal_distance = settings.optimal_distance.unwrap_or(optimal_distance);
+    let repulsive_cutoff = settings.repulsive_cutoff.or(repulsive_cutoff);
+
+    let mut step =
+        (settings.initial_step * optimal_distance).clamp(settings.min_step, settings.max_step);
     let mut energy_prev = f64::INFINITY;
     let mut progress = 0usize;
     let mut iterations = 0usize;
@@ -249,8 +291,7 @@ fn force_directed(params: ForceParams<'_>) -> usize {
             .collect();
         let tree = BarnesHutTree::new(&points, settings.tree_depth, settings.tree_capacity);
 
-        let avg_edge = average_edge_length(graph, &snapshot).max(1e-6);
-        let coeff = settings.c_strength * avg_edge.powf(settings.repulsive_exponent + 1.0);
+        let coeff = settings.c_strength * optimal_distance.powf(settings.repulsive_exponent + 1.0);
 
         let mut energy = 0.0;
         let mut displacement = 0.0;
@@ -263,18 +304,18 @@ fn force_directed(params: ForceParams<'_>) -> usize {
             for neighbor in graph.neighbors(i).iter() {
                 let target = neighbor.target;
                 let weight = neighbor.weight;
-                let delta = origin - positions[target];
+                let delta = snapshot[target] - origin;
                 let dist = delta.length().max(1e-9);
-                let attractive = delta * (-weight * dist / avg_edge);
+                let attractive = delta * (weight * dist / optimal_distance);
                 force += attractive;
             }
 
             // Repulsive forces via Barnes-Hut.
             let repulsive = tree.repulsive_force(
                 i,
-                positions[i],
+                origin,
                 settings.theta,
-                settings.repulsive_cutoff,
+                repulsive_cutoff,
                 coeff,
                 settings.repulsive_exponent,
             );
@@ -282,10 +323,11 @@ fn force_directed(params: ForceParams<'_>) -> usize {
 
             let magnitude = force.length();
             if magnitude > 0.0 {
-                let direction = force / magnitude;
                 let limited_step = step.min(settings.max_step);
-                positions[i] += direction * limited_step;
-                displacement += (positions[i] - origin).length();
+                let scale = magnitude.min(limited_step);
+                let movement = force * (scale / magnitude);
+                positions[i] += movement;
+                displacement += movement.length();
             }
             energy += magnitude * magnitude;
         }
@@ -296,19 +338,11 @@ fn force_directed(params: ForceParams<'_>) -> usize {
             break;
         }
 
-        match step_scheme {
-            StepScheme::Adaptive => {
-                let (new_step, new_progress, new_energy_prev) =
-                    update_step_adaptive(step, progress, energy, energy_prev, settings);
-                step = new_step;
-                progress = new_progress;
-                energy_prev = new_energy_prev;
-            }
-            StepScheme::Simple => {
-                step = (step * settings.cooling_factor).clamp(settings.min_step, settings.max_step);
-                energy_prev = energy;
-            }
-        }
+        let (new_step, new_progress, new_energy_prev) =
+            update_step_adaptive(step, progress, energy, energy_prev, settings);
+        step = new_step;
+        progress = new_progress;
+        energy_prev = new_energy_prev;
     }
 
     iterations
@@ -327,7 +361,46 @@ fn average_edge_length(graph: &Graph, positions: &[Vec2]) -> f64 {
             count += 1.0;
         }
     }
-    if count > 0.0 { total / count } else { 1.0 }
+    if count > 0.0 { total / count } else { 0.0 }
+}
+
+fn median_edge_length(graph: &Graph, positions: &[Vec2]) -> f64 {
+    let mut lengths = Vec::new();
+    for (u, node) in graph.nodes.iter().enumerate() {
+        for neighbor in &node.neighbors {
+            if neighbor.target < u {
+                continue;
+            }
+            let delta = positions[u] - positions[neighbor.target];
+            lengths.push(delta.length());
+        }
+    }
+    if lengths.is_empty() {
+        return 0.0;
+    }
+    lengths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    lengths[lengths.len() / 2]
+}
+
+fn resolve_optimal_distance(graph: &Graph, settings: &LayoutSettings) -> f64 {
+    if let Some(k) = settings.optimal_distance {
+        return k;
+    }
+    (graph.node_count().max(1) as f64).sqrt()
+}
+
+fn resolve_repulsive_cutoff(settings: &LayoutSettings, optimal_distance: f64) -> Option<f64> {
+    if let Some(cutoff) = settings.repulsive_cutoff {
+        Some(cutoff.max(0.0))
+    } else if let Some(multiplier) = settings.repulsive_cutoff_multiplier {
+        if multiplier.is_finite() && multiplier > 0.0 {
+            Some(multiplier * optimal_distance)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

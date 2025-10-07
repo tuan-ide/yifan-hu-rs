@@ -138,9 +138,28 @@ fn print_usage() {
 fn write_positions(path: &PathBuf, positions: &[Vec2]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    writeln!(writer, "vertex,x,y")?;
-    for (idx, pos) in positions.iter().enumerate() {
-        writeln!(writer, "{idx},{:.6},{:.6}", pos.x, pos.y)?;
+    let is_json = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+    if is_json {
+        writeln!(writer, "{{\"positions\":[")?;
+        for (idx, pos) in positions.iter().enumerate() {
+            writeln!(
+                writer,
+                "  {{\"vertex\":{idx},\"x\":{:.6},\"y\":{:.6}}}{}",
+                pos.x,
+                pos.y,
+                if idx + 1 == positions.len() { "" } else { "," }
+            )?;
+        }
+        writeln!(writer, "]}}")?;
+    } else {
+        writeln!(writer, "vertex,x,y")?;
+        for (idx, pos) in positions.iter().enumerate() {
+            writeln!(writer, "{idx},{:.6},{:.6}", pos.x, pos.y)?;
+        }
     }
     writer.flush()?;
     Ok(())
