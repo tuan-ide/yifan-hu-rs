@@ -28,6 +28,7 @@ pub struct LayoutSettings {
     pub jitter_fraction: f64,
     pub optimal_distance: Option<f64>,
     pub min_edge_length_ratio: f64,
+    pub final_edge_length_ratio: f64,
 }
 
 impl Default for LayoutSettings {
@@ -43,9 +44,9 @@ impl Default for LayoutSettings {
             adaptive_progress_limit: 5,
             repulsive_exponent: 1.0,
             theta: 1.2,
-            c_strength: 0.01,
+            c_strength: 0.004,
             repulsive_cutoff: None,
-            repulsive_cutoff_multiplier: Some(10.0),
+            repulsive_cutoff_multiplier: Some(3.0),
             tree_capacity: 1,
             tree_depth: 10,
             coarsening_strategy: CoarseningStrategy::Hybrid,
@@ -55,6 +56,7 @@ impl Default for LayoutSettings {
             jitter_fraction: 0.1,
             optimal_distance: None,
             min_edge_length_ratio: 0.25,
+            final_edge_length_ratio: 0.4,
         }
     }
 }
@@ -105,6 +107,12 @@ pub fn multilevel_layout(graph: &Graph, settings: &LayoutSettings) -> LayoutResu
         optimal_distance,
         repulsive_cutoff,
     });
+    scale_to_target_edge_length(
+        graph,
+        &mut positions,
+        optimal_distance,
+        settings.final_edge_length_ratio,
+    );
     LayoutResult {
         positions,
         iterations,
@@ -400,6 +408,29 @@ fn resolve_repulsive_cutoff(settings: &LayoutSettings, optimal_distance: f64) ->
         }
     } else {
         None
+    }
+}
+
+fn scale_to_target_edge_length(
+    graph: &Graph,
+    positions: &mut [Vec2],
+    optimal_distance: f64,
+    ratio: f64,
+) {
+    if positions.is_empty() {
+        return;
+    }
+    if ratio <= 0.0 {
+        return;
+    }
+    let avg_edge = average_edge_length(graph, positions);
+    if avg_edge <= 1e-6 {
+        return;
+    }
+    let target = optimal_distance * ratio;
+    let scale = target / avg_edge;
+    for pos in positions.iter_mut() {
+        *pos = *pos * scale;
     }
 }
 
